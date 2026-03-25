@@ -11,6 +11,7 @@ from lerobot.datasets.feature_utils import build_dataset_frame, combine_feature_
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.bi_so_follower_simulated.config import BiSOFollowerSimulatedConfig
 from lerobot.robots.bi_so_follower_simulated.robot import BiSOFollowerSimulated, MOTOR_NAMES
+from lerobot.simulations.bi_so.cameras import resolve_camera_assets, resolve_camera_names
 from lerobot.simulations.bi_so.single_toggle import _active_arm_index
 from lerobot.teleoperators.so_leader import SOLeader, SOLeaderTeleopConfig
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
@@ -30,21 +31,29 @@ def _add_sim_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-realtime", dest="realtime", action="store_false")
     parser.add_argument("--slowmo", type=float, default=1.0)
     parser.add_argument("--camera-names", nargs="*", default=())
+    parser.add_argument("--use-default-cameras", action="store_true", default=False)
+    parser.add_argument("--no-default-cameras", dest="use_default_cameras", action="store_false")
     parser.add_argument("--render-height", type=int, default=480)
     parser.add_argument("--render-width", type=int, default=640)
 
 
 def _build_sim_helper(args: argparse.Namespace, *, sim_id: str) -> BiSOFollowerSimulated:
-    render_size = None if not args.camera_names else (args.render_height, args.render_width)
+    camera_names = resolve_camera_names(args.camera_names, use_default_cameras=args.use_default_cameras)
+    bridge_path, xml_path = resolve_camera_assets(
+        camera_names,
+        bridge_path=args.bridge_path,
+        xml_path=args.xml_path,
+    )
+    render_size = None if not camera_names else (args.render_height, args.render_width)
     cfg = BiSOFollowerSimulatedConfig(
         id=sim_id,
         sim_root=None if args.sim_root is None else Path(args.sim_root),
-        bridge_path=None if args.bridge_path is None else Path(args.bridge_path),
-        xml_path=None if args.xml_path is None else Path(args.xml_path),
+        bridge_path=bridge_path,
+        xml_path=xml_path,
         bridge_factory_name=args.bridge_factory_name,
         robot_dofs=args.robot_dofs,
         render_size=render_size,
-        camera_names=tuple(args.camera_names),
+        camera_names=camera_names,
         realtime=args.realtime,
         slowmo=args.slowmo,
         launch_viewer=args.launch_viewer,
@@ -211,7 +220,7 @@ def _build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--video", action="store_true", default=True)
     record_parser.add_argument("--no-video", dest="video", action="store_false")
     _add_sim_args(record_parser)
-    record_parser.set_defaults(launch_viewer=True)
+    record_parser.set_defaults(launch_viewer=True, use_default_cameras=True)
 
     replay_parser = subparsers.add_parser("replay")
     replay_parser.add_argument("--repo-id", required=True)
@@ -219,7 +228,7 @@ def _build_parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("--episode", type=int, default=0)
     replay_parser.add_argument("--fps", type=int, default=None)
     _add_sim_args(replay_parser)
-    replay_parser.set_defaults(launch_viewer=True)
+    replay_parser.set_defaults(launch_viewer=True, use_default_cameras=False)
 
     return parser
 

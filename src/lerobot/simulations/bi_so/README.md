@@ -55,6 +55,15 @@ That keeps the simulated robot usable from the normal LeRobot robot registry whi
 - AOSH-style dataset entrypoint
 - provides `record` and `replay` subcommands in one file
 
+`src/lerobot/simulations/bi_so/cameras.py`
+- simulation-local camera presets and default camera asset paths
+
+`src/lerobot/simulations/bi_so/bridge.py`
+- simulation-local MuJoCo bridge that renders left-arm, right-arm, top, and front cameras
+
+`src/lerobot/simulations/bi_so/lerobot_pick_place_cube_cameras.xml`
+- simulation-local scene file with extra recording cameras
+
 ## Commands
 
 ### 1. Standard bimanual teleop
@@ -102,6 +111,32 @@ python -m lerobot.simulations.bi_so.dataset record ^
   --fps 30 ^
   --sim-root C:\Users\Ninja\lerobot\src\lerobot\robots\bi_so_follower_simulated\mujoco ^
   --launch-viewer
+```
+
+By default, `record` now enables three simulated cameras:
+- `left_arm`
+- `right_arm`
+- `top`
+
+Camera behavior:
+- `top` is static in the world
+- `left_arm` is mounted on the left end-effector
+- `right_arm` is mounted on the right end-effector
+
+You can disable that with:
+
+```powershell
+python -m lerobot.simulations.bi_so.dataset record ^
+  --no-default-cameras ^
+  ...
+```
+
+Or override the camera set explicitly:
+
+```powershell
+python -m lerobot.simulations.bi_so.dataset record ^
+  --camera-names left_arm right_arm top front ^
+  ...
 ```
 
 ### 5. Replay a dataset
