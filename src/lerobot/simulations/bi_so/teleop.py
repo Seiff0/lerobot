@@ -25,7 +25,7 @@ ChoiceRegistry/fallback factory.
 Example:
 
 ```shell
-python -m lerobot.simulations.bi_so.teleoperate_bi_so_follower_simulated ^
+python -m lerobot.simulations.bi_so.teleop ^
   --robot.type=bi_so_follower_simulated ^
   --robot.launch_viewer=true ^
   --robot.sim_root=C:/Users/Ninja/AOSH/lerobot/sim ^

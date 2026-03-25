@@ -24,7 +24,7 @@ whichever arm is currently active.
 Example:
 
 ```shell
-python -m lerobot.simulations.bi_so.teleoperate_single_so_leader_toggle \
+python -m lerobot.simulations.bi_so.single_toggle \
   --leader-port COM5 \
   --sim-root C:/Users/User/AOSH/lerobot/sim \
   --launch-viewer \
@@ -41,11 +41,8 @@ from pathlib import Path
 
 import numpy as np
 
-from lerobot.robots.bi_so_follower_simulated.bi_so_follower_simulated import (
-    MOTOR_NAMES,
-    BiSOFollowerSimulated,
-    BiSOFollowerSimulatedConfig,
-)
+from lerobot.robots.bi_so_follower_simulated.robot import MOTOR_NAMES, BiSOFollowerSimulated
+from lerobot.robots.bi_so_follower_simulated.config import BiSOFollowerSimulatedConfig
 from lerobot.teleoperators.so_leader import SOLeader, SOLeaderTeleopConfig
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging
@@ -65,7 +62,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--sim-root", default=None)
     parser.add_argument("--bridge-path", default=None)
     parser.add_argument("--xml-path", default=None)
-    parser.add_argument("--bridge-factory-name", default="make_task2_bimanual_buses")
+    parser.add_argument("--bridge-factory-name", default="make_bimanual_buses")
     parser.add_argument("--robot-dofs", type=int, default=6)
     parser.add_argument("--launch-viewer", action="store_true", default=False)
     parser.add_argument("--realtime", action="store_true", default=True)
@@ -77,6 +74,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _build_sim_helper(args: argparse.Namespace) -> BiSOFollowerSimulated:
+    # Keep the single-toggle entrypoint self-contained so it is easy to debug on its own.
     cfg = BiSOFollowerSimulatedConfig(
         id="single_leader_toggle_sim",
         sim_root=None if args.sim_root is None else Path(args.sim_root),

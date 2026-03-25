@@ -1,219 +1,185 @@
-# Bimanual SO MuJoCo Simulation
+# BI-SO MuJoCo Simulation
 
-This folder documents the isolated bimanual SO-arm simulation work added without modifying the main robot or teleoperator codepaths.
+This simulation code is split into two folders on purpose:
 
-The goal of this work is:
-- provide a `bi_so_follower_simulated` robot implementation that behaves like a bimanual SO follower at the API level
-- keep compatibility with the existing `bi_so_leader` teleoperator so real leader arms can drive the simulation
-- keep simulation-related additions grouped under new files and folders for easier continuation
-
-## What Was Added
-
-New robot package:
 - `src/lerobot/robots/bi_so_follower_simulated/`
-
-New simulation wrapper files:
+  - the reusable robot package
+  - this is where the MuJoCo bridge, XML scene, action mapping, and robot API live
 - `src/lerobot/simulations/bi_so/`
+  - the small user-facing runner scripts
+  - this is where the commands for teleop, single-toggle, and viewer live
 
-New local MuJoCo XML assets:
-- `src/lerobot/robots/bi_so_follower_simulated/mujoco/lerobot_pick_place_cube.xml`
-- `src/lerobot/robots/bi_so_follower_simulated/mujoco/so_arm100.xml`
-- `src/lerobot/robots/bi_so_follower_simulated/mujoco/so_arm100_right.xml`
+Keeping those separate makes the simulated robot usable from the normal LeRobot robot registry while still giving us dedicated scripts without modifying the main CLI files.
 
-New test file:
-- `tests/robots/test_bi_so_follower_simulated.py`
+## Current File Layout
 
-## Current Architecture
+### Robot package
 
-The current control chain is:
+`src/lerobot/robots/bi_so_follower_simulated/config.py`
+- config for the simulated robot
+- selects the scene root, bridge file, XML file, viewer mode, cameras, and timing
 
-`bi_so_leader` teleoperator
--> existing LeRobot teleoperation pipeline
--> `bi_so_follower_simulated` robot
--> external MuJoCo bridge
--> MuJoCo scene
+`src/lerobot/robots/bi_so_follower_simulated/robot.py`
+- main `BiSOFollowerSimulated` robot implementation
+- loads the local MuJoCo backend
+- exposes left/right action keys
+- converts gripper values between SO teleop units and MuJoCo actuator units
+- applies the joint offsets/sign fixes needed for this scene
 
-This means the simulation does not read leader-arm hardware directly itself. It relies on the existing teleoperator stack:
-- `lerobot.teleoperators.bi_so_leader.BiSOLeader`
-- `lerobot.teleoperators.so_leader.SOLeader`
+`src/lerobot/robots/bi_so_follower_simulated/mujoco/bridge.py`
+- combined MuJoCo backend file
+- this replaces the older split between `task2_motors_bridge.py` and `mujoco_task2.py`
+- contains:
+  - scene loading
+  - viewer handling
+  - startup pose application
+  - shared backend stepping loop
+  - per-arm bus wrappers
 
-That is intentional. It keeps the simulation compatible with the same action keys used by the real bimanual follower.
+`src/lerobot/robots/bi_so_follower_simulated/mujoco/lerobot_pick_place_cube.xml`
+- the bimanual scene
 
-## How The Teleoperation Mapping Works
+`src/lerobot/robots/bi_so_follower_simulated/mujoco/so_arm100.xml`
+- left arm model and authored `home` pose
 
-`bi_so_leader` returns actions with keys like:
-- `left_shoulder_pan.pos`
-- `left_gripper.pos`
-- `right_shoulder_pan.pos`
-- `right_gripper.pos`
+`src/lerobot/robots/bi_so_follower_simulated/mujoco/so_arm100_right.xml`
+- right arm model
 
-`bi_so_follower_simulated` accepts exactly those keys in `send_action()`.
+`src/lerobot/robots/bi_so_follower_simulated/mujoco/assets/`
+- STL meshes used by the MuJoCo scene
 
-Internally:
-- the first five joints are treated as angle values compatible with the SO leader/follower convention
-- the gripper is exposed in SO-style `0..100` units
-- the gripper is converted internally to the MuJoCo actuator control range
+### Simulation scripts
 
-So the intended real-hardware teleop path is already:
-- leader arms connect through `bi_so_leader`
-- their actions flow through the standard teleop loop
-- the simulated robot receives those actions and writes them into the MuJoCo buses
+`src/lerobot/simulations/bi_so/teleop.py`
+- normal bimanual teleop entrypoint
+- uses the standard `bi_so_leader` teleoperator path
 
-## Files And Responsibilities
+`src/lerobot/simulations/bi_so/single_toggle.py`
+- one real SO leader controls whichever simulated arm is active
+- press `t` in the viewer to toggle between the two simulated arms
 
-### `src/lerobot/robots/bi_so_follower_simulated/config_bi_so_follower_simulated.py`
+`src/lerobot/simulations/bi_so/view.py`
+- launches the MuJoCo scene without connecting any real hardware
 
-Defines the robot config:
-- `sim_root`
-- `bridge_path`
-- `xml_path`
-- `bridge_factory_name`
-- `robot_dofs`
-- `render_size`
-- `camera_names`
-- `realtime`
-- `slowmo`
-- `launch_viewer`
-- `max_relative_target`
+## Why We Did Not Collapse Everything Into One Folder
 
-### `src/lerobot/robots/bi_so_follower_simulated/bi_so_follower_simulated.py`
+If everything lived only under `src/lerobot/simulations/bi_so/`, the simulated robot would stop being a normal LeRobot robot package.
 
-Implements the simulated robot wrapper.
+The current split gives us both:
+- a proper robot implementation under `robots/`
+- small entrypoint scripts under `simulations/`
 
-Current features:
-- exposes bimanual action keys matching the real bimanual SO follower style
-- exposes observations using the same left/right prefixed motor naming
-- supports optional rendered camera observations
-- converts gripper between SO teleop units and MuJoCo actuator units
-- supports `max_relative_target` clipping using the shared robot safety helper
-- loads XML from the local package folder first
-- loads the external bridge module dynamically
+That is the cleanest way to avoid editing the main robot factory and teleop CLI files.
 
-### `src/lerobot/robots/bi_so_follower_simulated/mujoco/`
+## Startup Behavior
 
-Contains local XML scene definitions so the simulation has an internal default scene and does not depend on external XML files.
+The startup pose now comes from the authored MuJoCo `home` key in the arm XML and is applied to both arms by the local bridge when the first bus connects.
 
-The scene currently includes:
-- two simple SO-style arms
-- a floor
-- a movable cube body
-- a target region
-- front and top cameras
-- end-effector sites (`ee_site`, `ee_site_r`)
+Important detail:
+- the bridge holds that pose explicitly
+- this avoids the older issue where the arm could drift away from the intended folded startup pose
 
-These XMLs are simplified and self-contained. They do not depend on external mesh assets.
+## Control Paths
 
-### `src/lerobot/simulations/bi_so/teleoperate_bi_so_follower_simulated.py`
+### 1. Standard bimanual teleop
 
-This is a wrapper entrypoint.
+Use this when you have two real leader arms and want the normal LeRobot teleoperation path:
 
-Why it exists:
-- the main CLI files were intentionally left untouched
-- this wrapper imports the new simulated robot module first
-- after that it calls the standard `lerobot_teleoperate` entrypoint
-
-That allows the existing teleop system to discover the new robot through the registry/fallback machinery without changing the core CLI modules.
-
-## XML Resolution Behavior
-
-If `xml_path` is not passed, the robot currently searches in this order:
-
-1. local package simulation folder:
-   `src/lerobot/robots/bi_so_follower_simulated/mujoco/lerobot_pick_place_cube.xml`
-2. any user-provided `sim_root`
-3. repo-level `sim/`
-4. sibling `AOSH/lerobot/sim/`
-5. bridge folder fallback
-
-This means the simulation now has a local default XML scene.
-
-## Bridge Dependency
-
-Important: the XML files are now local, but the MuJoCo bridge logic is still external unless you explicitly provide a local bridge file.
-
-The current robot still expects:
-- `task2_motors_bridge.py`
-- `mujoco_task2.py`
-
-The wrapper tries to locate those from:
-- `bridge_path` if given
-- `sim_root` if given
-- `repo_root/sim`
-- `repo_root/../AOSH/lerobot/sim`
-
-So at the moment:
-- XML is bundled locally
-- bridge/backend Python is still expected from an external sim folder unless added later
-
-## Recommended Local Run Approach
-
-Using Conda is a reasonable choice for local testing.
-
-Typical requirements are:
-- Python environment with project dependencies installed
-- `mujoco` installed
-- access to the external bridge files unless they are later copied locally
-- serial access to the real SO leader arms if using hardware teleoperation
-
-Example command:
-
-```shell
-python -m lerobot.simulations.bi_so.teleoperate_bi_so_follower_simulated \
-  --robot.type=bi_so_follower_simulated \
-  --robot.sim_root=C:/Users/Ninja/AOSH/lerobot/sim \
-  --robot.launch_viewer=true \
-  --teleop.type=bi_so_leader \
-  --teleop.left_arm_config.port=COM5 \
-  --teleop.right_arm_config.port=COM6 \
-  --teleop.id=bimanual_leader \
+```powershell
+python -m lerobot.simulations.bi_so.teleop ^
+  --robot.type=bi_so_follower_simulated ^
+  --robot.sim_root=C:\Users\Ninja\lerobot\src\lerobot\robots\bi_so_follower_simulated\mujoco ^
+  --robot.launch_viewer=true ^
+  --teleop.type=bi_so_leader ^
+  --teleop.left_arm_config.port=COM5 ^
+  --teleop.right_arm_config.port=COM6 ^
+  --teleop.id=bimanual_leader ^
   --fps=60
 ```
 
-Optional rendered cameras:
+### 2. Single leader with `t` toggle
 
-```shell
---robot.camera_names="['front','top']" --robot.render_size="(480,640)"
+Use this when one real leader arm should control one simulated arm at a time:
+
+```powershell
+python -m lerobot.simulations.bi_so.single_toggle ^
+  --leader-port COM5 ^
+  --sim-root C:\Users\Ninja\lerobot\src\lerobot\robots\bi_so_follower_simulated\mujoco ^
+  --launch-viewer ^
+  --hz 60
 ```
 
-## Project Status
+Behavior:
+- viewer starts
+- `t` switches the active simulated arm
+- the single real leader drives the active arm only
 
-What is already in place:
-- new isolated simulated robot package
-- left/right action compatibility with `bi_so_leader`
-- local default MuJoCo XML files
-- wrapper entrypoint for teleoperation
-- gripper conversion logic
-- optional offscreen camera exposure
-- basic test coverage added for wrapper behavior
+### 3. Viewer only
 
-What is not yet fully localized:
-- `task2_motors_bridge.py`
-- `mujoco_task2.py`
+Use this to inspect the scene without connecting any arms:
 
-What is not yet verified in this environment:
-- end-to-end runtime test
-- MuJoCo viewer launch
-- real serial connection to the leader arms
-- pytest execution
+```powershell
+python -m lerobot.simulations.bi_so.view ^
+  --sim-root C:\Users\Ninja\lerobot\src\lerobot\robots\bi_so_follower_simulated\mujoco
+```
 
-The last point is environmental: Python execution in this workspace was not usable during implementation, so runtime verification could not be completed here.
+## Mapping Notes
 
-## Continuation Notes
+The simulated robot exposes:
+- `left_shoulder_pan.pos`
+- `left_shoulder_lift.pos`
+- `left_elbow_flex.pos`
+- `left_wrist_flex.pos`
+- `left_wrist_roll.pos`
+- `left_gripper.pos`
+- and the same keys with the `right_` prefix
 
-If someone continues this work, the most useful next steps are:
+Internally:
+- the first five joints are treated as angle values
+- the gripper is exposed as SO-style `0..100`
+- the robot layer converts that gripper value to the MuJoCo actuator range
+- the robot layer also applies the static joint offset and sign fix required by this scene
 
-1. Move or recreate the bridge/backend Python files into the local simulation folder so the package becomes fully self-contained.
-2. Run a full Conda-based end-to-end test with:
-   - MuJoCo installed
-   - the new wrapper entrypoint
-   - real `bi_so_leader` hardware
-3. Verify that joint directions match the real teleoperator intuitively in the viewer.
-4. Tune the local XML geometry and actuator gains if motion feels too rough or unrealistic.
-5. Add more tests once a working Python runtime is available.
+## What Changed Over Time
 
-## Notes For Future Developers
+This simulation started with copied files and longer names. It has now been cleaned into:
 
-- This work intentionally avoided modifying the existing main teleop files.
-- The simulation is integrated through the existing teleoperator pipeline, not through direct controller reads inside the robot class.
-- The action interface was kept aligned with `bi_so_follower` and `bi_so_leader` on purpose.
-- The local XMLs are functional defaults, not final high-fidelity mechanical models.
+- `config.py`
+- `robot.py`
+- `mujoco/bridge.py`
+- `teleop.py`
+- `single_toggle.py`
+- `view.py`
+
+The old split `task2_motors_bridge.py` + `mujoco_task2.py` was combined into one clearer backend file:
+
+- `src/lerobot/robots/bi_so_follower_simulated/mujoco/bridge.py`
+
+The old longer entrypoint names were shortened to match what they actually do:
+
+- `teleop.py`
+- `single_toggle.py`
+- `view.py`
+
+## Known Limitations
+
+- The simulation scripts are intentionally local and isolated; they do not modify the main LeRobot CLI registration flow.
+- The single-toggle mode is a custom script, not part of the standard `bi_so_leader` teleoperator.
+- The MuJoCo scene still uses hand-tuned mapping offsets in the robot wrapper.
+
+## Fast Debugging Guide
+
+If the problem is:
+
+- startup pose or viewer behavior
+  - look in `mujoco/bridge.py`
+- robot action mapping or gripper conversion
+  - look in `robot.py`
+- robot config and path resolution
+  - look in `config.py`
+- one-controller toggle behavior
+  - look in `single_toggle.py`
+- normal two-leader teleop launch
+  - look in `teleop.py`
+- viewer-only launch
+  - look in `view.py`

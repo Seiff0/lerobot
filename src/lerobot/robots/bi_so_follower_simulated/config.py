@@ -28,7 +28,7 @@ class BiSOFollowerSimulatedConfig(RobotConfig):
     sim_root: Path | None = None
     bridge_path: Path | None = None
     xml_path: Path | None = None
-    bridge_factory_name: str = "make_task2_bimanual_buses"
+    bridge_factory_name: str = "make_bimanual_buses"
 
     robot_dofs: int = 6
     render_size: tuple[int, int] | None = None

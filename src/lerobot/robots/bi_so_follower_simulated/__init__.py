@@ -14,6 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .bi_so_follower_simulated import BiSOFollowerSimulated
-from .config_bi_so_follower_simulated import BiSOFollowerSimulatedConfig
+from .config import BiSOFollowerSimulatedConfig
+from .robot import BiSOFollowerSimulated
 

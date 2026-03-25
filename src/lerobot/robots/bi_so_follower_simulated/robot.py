@@ -32,7 +32,7 @@ from lerobot.utils.decorators import check_if_already_connected, check_if_not_co
 
 from lerobot.robots.robot import Robot
 from lerobot.robots.utils import ensure_safe_goal_position
-from lerobot.robots.bi_so_follower_simulated.config_bi_so_follower_simulated import BiSOFollowerSimulatedConfig
+from .config import BiSOFollowerSimulatedConfig
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ ARM_PREFIXES = ("left", "right")
 MOTOR_NAMES = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
 GRIPPER_INDEX = len(MOTOR_NAMES) - 1
 DEFAULT_SCENE_XML = "lerobot_pick_place_cube.xml"
-DEFAULT_BRIDGE_PY = "task2_motors_bridge.py"
+DEFAULT_BRIDGE_PY = "bridge.py"
 CAMERA_ALIASES = {
     "front": ("front", "camera_front"),
     "top": ("top", "camera_top"),
@@ -56,7 +56,7 @@ class _SimCamera:
 
 
 class BiSOFollowerSimulated(Robot):
-    """Bimanual SO follower robot backed by an external MuJoCo Task2 bridge."""
+    """Bimanual SO follower robot backed by the local MuJoCo bridge."""
 
     config_class = BiSOFollowerSimulatedConfig
     name = "bi_so_follower_simulated"
@@ -219,7 +219,7 @@ class BiSOFollowerSimulated(Robot):
 
         searched = ", ".join(str(path / DEFAULT_BRIDGE_PY) for path in self._candidate_sim_roots())
         raise FileNotFoundError(
-            "Could not find `task2_motors_bridge.py`. "
+            f"Could not find `{DEFAULT_BRIDGE_PY}`. "
             f"Searched: {searched}. Set `bridge_path` or `sim_root` in the robot config."
         )
 
@@ -329,10 +329,10 @@ class BiSOFollowerSimulated(Robot):
     def _robot_to_sim_arm_units(self, arm_index: int, robot_qpos: np.ndarray) -> np.ndarray:
         sim_qpos = np.asarray(robot_qpos, dtype=np.float32).copy()
 
-        # Added a static offset on joints 2 and 3 to match the SO-arm's default pose in the Task2 scene.
+        # Align the teleop joint convention with the local MuJoCo arm convention.
         sim_qpos += np.array([9.0, -90.0, 90.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
-        # Fix joint inversion
+        # The MuJoCo base joint rotates in the opposite direction to the leader convention.
         sim_qpos *= np.array([-1, 1, 1, 1, 1, 1], dtype=np.int32)
 
         sim_qpos[GRIPPER_INDEX] = self._gripper_percent_to_deg(arm_index, sim_qpos[GRIPPER_INDEX])
@@ -391,10 +391,11 @@ class BiSOFollowerSimulated(Robot):
 
     @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
-        requested_action = {key: value for key, value in action.items() if key in self.action_features} 
+        requested_action = {key: value for key, value in action.items() if key in self.action_features}
         if not requested_action:
             if 2*len(action.items()) != len(self.action_features):
                 return {}
+            # Allow a single-arm shaped action dict to fan out to both arms when useful for debugging.
             for key, value in action.items():
                 l, r = "left_" + key, "right_" + key
                 if l in self.action_features and r in self.action_features:
