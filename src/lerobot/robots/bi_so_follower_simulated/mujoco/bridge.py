@@ -172,6 +172,7 @@ class Task2SharedBackend:
         )
         self.model = self.sim.model
         self.data = self.sim.data
+        self.render_size = render_size
 
         self.robot_dofs = int(robot_dofs)
         self.nu = int(self.model.nu)
@@ -181,12 +182,13 @@ class Task2SharedBackend:
         self.slowmo = float(slowmo)
 
         self._ctrl_target = np.zeros(self.nu, dtype=float)
+        self.height = 0
+        self.width = 0
 
-        if render_size is None:
+        if self.render_size is None:
             self._renderer = None
         else:
-            height, width = render_size
-            self._renderer = mujoco.Renderer(self.model, height=height, width=width)
+            self.height, self.width = self.render_size
 
         self._lock = threading.Lock()
         self._running = False
@@ -304,13 +306,13 @@ class Task2SharedBackend:
                 qpos_deg=self._state.qpos_deg.copy(),
                 images={name: image.copy() for name, image in self._state.images.items()},
             )
-
+         
     def _render_images(self) -> dict[str, np.ndarray]:
         if self._renderer is None:
             return {}
 
         images: dict[str, np.ndarray] = {}
-        for camera_name in ("camera_front", "camera_top", "front", "top"):
+        for camera_name in ("camera_front", "camera_top", "camera_vizu", "front", "top", "vizu"):
             camera_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
             if camera_id < 0:
                 continue
@@ -320,6 +322,8 @@ class Task2SharedBackend:
 
     def _loop(self) -> None:
         dt = float(self.model.opt.timestep) * int(self.sim.substeps)
+        if self.render_size != None:
+            self._renderer = mujoco.Renderer(self.model, height=self.height, width=self.width)
 
         while True:
             with self._lock:
