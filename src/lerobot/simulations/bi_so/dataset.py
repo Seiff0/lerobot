@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import time
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from lerobot.datasets.feature_utils import build_dataset_frame, combine_feature_dicts, hw_to_dataset_features
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -18,6 +21,44 @@ from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
 from lerobot.utils.control_utils import sanity_check_dataset_robot_compatibility
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging
+
+logger = logging.getLogger(__name__)
+
+
+def _clone_dataset_frame(frame: dict[str, Any]) -> dict[str, Any]:
+    cloned: dict[str, Any] = {}
+    for key, value in frame.items():
+        if isinstance(value, np.ndarray):
+            cloned[key] = value.copy()
+        else:
+            cloned[key] = value
+    return cloned
+
+
+def _reconstruct_episode_frames(
+    sampled_frames: list[tuple[float, dict[str, Any]]],
+    *,
+    target_fps: float,
+    episode_time_s: float,
+) -> list[dict[str, Any]]:
+    if not sampled_frames:
+        return []
+
+    expected_frames = max(1, int(round(episode_time_s * target_fps)))
+    reconstructed: list[dict[str, Any]] = []
+    sample_index = 0
+
+    for output_index in range(expected_frames):
+        target_timestamp = output_index / target_fps
+        while (
+            sample_index + 1 < len(sampled_frames)
+            and sampled_frames[sample_index + 1][0] <= target_timestamp
+        ):
+            sample_index += 1
+
+        reconstructed.append(_clone_dataset_frame(sampled_frames[sample_index][1]))
+
+    return reconstructed
 
 
 def _add_sim_args(parser: argparse.ArgumentParser) -> None:
@@ -33,8 +74,9 @@ def _add_sim_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--camera-names", nargs="*", default=())
     parser.add_argument("--use-default-cameras", action="store_true", default=False)
     parser.add_argument("--no-default-cameras", dest="use_default_cameras", action="store_false")
-    parser.add_argument("--render-height", type=int, default=480)
-    parser.add_argument("--render-width", type=int, default=640)
+    parser.add_argument("--camera-fps", type=float, default=10.0)
+    parser.add_argument("--render-height", type=int, default=240)
+    parser.add_argument("--render-width", type=int, default=320)
 
 
 def _build_sim_helper(args: argparse.Namespace, *, sim_id: str) -> BiSOFollowerSimulated:
@@ -54,6 +96,7 @@ def _build_sim_helper(args: argparse.Namespace, *, sim_id: str) -> BiSOFollowerS
         robot_dofs=args.robot_dofs,
         render_size=render_size,
         camera_names=camera_names,
+        camera_fps=args.camera_fps,
         realtime=args.realtime,
         slowmo=args.slowmo,
         launch_viewer=args.launch_viewer,
@@ -82,6 +125,8 @@ def _create_dataset(robot: BiSOFollowerSimulated, args: argparse.Namespace) -> L
     if args.resume:
         dataset = LeRobotDataset(args.repo_id, root=args.root)
         sanity_check_dataset_robot_compatibility(dataset, robot, int(args.fps), features)
+        if dataset.episode_buffer is None:
+            dataset.episode_buffer = dataset.create_episode_buffer()
         return dataset
 
     try:
@@ -126,14 +171,31 @@ def _record(args: argparse.Namespace) -> int:
     try:
         sim_helper.connect()
         leader.connect(calibrate=args.calibrate)
+        if args.force_calibrate:
+            leader.calibrate()
         dataset = _create_dataset(sim_helper, args)
 
-        for _ in range(int(args.num_episodes)):
+        target_fps = float(args.fps)
+        episode_time_s = float(args.episode_time_s)
+        expected_frames = max(1, int(round(episode_time_s * target_fps)))
+
+        for episode_idx in range(int(args.num_episodes)):
             if dataset.episode_buffer is not None and dataset.episode_buffer["size"] > 0:
                 dataset.clear_episode_buffer()
 
+            logger.info(
+                "Recording simulated episode %s/%s for %.2fs at %.1f FPS (targeting %s frames).",
+                episode_idx + 1,
+                int(args.num_episodes),
+                episode_time_s,
+                target_fps,
+                expected_frames,
+            )
+
             episode_start = time.perf_counter()
-            while time.perf_counter() - episode_start < float(args.episode_time_s):
+            captured_samples = 0
+            sampled_frames: list[tuple[float, dict[str, Any]]] = []
+            while time.perf_counter() - episode_start < episode_time_s:
                 tick_start = time.perf_counter()
 
                 observation = sim_helper.get_observation()
@@ -150,10 +212,48 @@ def _record(args: argparse.Namespace) -> int:
                 observation_frame = build_dataset_frame(dataset.features, observation, prefix=OBS_STR)
                 action_frame = build_dataset_frame(dataset.features, sent_action, prefix=ACTION)
                 frame = {**observation_frame, **action_frame, "task": args.task}
-                dataset.add_frame(frame)
+                sampled_frames.append((time.perf_counter() - episode_start, _clone_dataset_frame(frame)))
+                captured_samples += 1
 
                 dt_s = time.perf_counter() - tick_start
-                precise_sleep(max((1.0 / float(args.fps)) - dt_s, 0.0))
+                precise_sleep(max((1.0 / target_fps) - dt_s, 0.0))
+
+            reconstructed_frames = _reconstruct_episode_frames(
+                sampled_frames,
+                target_fps=target_fps,
+                episode_time_s=episode_time_s,
+            )
+            if not reconstructed_frames:
+                raise RuntimeError("No frames were captured during the episode.")
+
+            dataset.episode_buffer = dataset.create_episode_buffer()
+            for frame in reconstructed_frames:
+                dataset.add_frame(frame)
+
+            captured_frames = int(dataset.episode_buffer["size"]) if dataset.episode_buffer is not None else 0
+            elapsed_s = max(time.perf_counter() - episode_start, 1e-6)
+            effective_fps = captured_samples / elapsed_s if captured_samples > 0 else 0.0
+            repeated_frames = max(0, captured_frames - captured_samples)
+            if captured_samples < expected_frames:
+                logger.warning(
+                    "Sim recording captured %s/%s real samples over %.2fs (effective %.2f FPS vs %.2f requested). "
+                    "Inserted %s repeated frame(s) so the saved video still matches the requested duration. "
+                    "If this persists, reduce camera count, render size, viewer usage, or requested FPS.",
+                    captured_samples,
+                    expected_frames,
+                    elapsed_s,
+                    effective_fps,
+                    target_fps,
+                    repeated_frames,
+                )
+            else:
+                logger.info(
+                    "Sim recording captured %s real samples and stored %s frames over %.2fs (effective %.2f FPS).",
+                    captured_samples,
+                    captured_frames,
+                    elapsed_s,
+                    effective_fps,
+                )
 
             dataset.save_episode()
 
@@ -210,6 +310,7 @@ def _build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--no-leader-use-degrees", dest="leader_use_degrees", action="store_false")
     record_parser.add_argument("--calibrate", action="store_true", default=True)
     record_parser.add_argument("--no-calibrate", dest="calibrate", action="store_false")
+    record_parser.add_argument("--force-calibrate", action="store_true", default=False)
     record_parser.add_argument("--repo-id", required=True)
     record_parser.add_argument("--root", default=None)
     record_parser.add_argument("--resume", action="store_true", default=False)

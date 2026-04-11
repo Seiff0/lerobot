@@ -159,10 +159,13 @@ class Task2SharedBackend:
         xml_path: str,
         robot_dofs: int = 6,
         render_size: tuple[int, int] | None = (480, 640),
+        camera_names: tuple[str, ...] = (),
+        camera_fps: float | None = None,
         realtime: bool = True,
         slowmo: float = 1.0,
         launch_viewer: bool = False,
     ):
+        del camera_names, camera_fps
         self.xml_path = Path(xml_path).resolve()
         self.sim = Task2Sim(
             xml_path=self.xml_path,
@@ -184,10 +187,9 @@ class Task2SharedBackend:
         self._ctrl_target = np.zeros(self.nu, dtype=float)
         self.height = 0
         self.width = 0
+        self._renderer = None
 
-        if self.render_size is None:
-            self._renderer = None
-        else:
+        if self.render_size is not None:
             self.height, self.width = self.render_size
 
         self._lock = threading.Lock()
@@ -306,6 +308,9 @@ class Task2SharedBackend:
                 qpos_deg=self._state.qpos_deg.copy(),
                 images={name: image.copy() for name, image in self._state.images.items()},
             )
+
+    def peek_state(self) -> _SharedState:
+        return self.get_state()
          
     def _render_images(self) -> dict[str, np.ndarray]:
         if self._renderer is None:
@@ -322,7 +327,7 @@ class Task2SharedBackend:
 
     def _loop(self) -> None:
         dt = float(self.model.opt.timestep) * int(self.sim.substeps)
-        if self.render_size != None:
+        if self.render_size is not None and self._renderer is None:
             self._renderer = mujoco.Renderer(self.model, height=self.height, width=self.width)
 
         while True:
@@ -388,6 +393,8 @@ def make_bimanual_buses(
     xml_path: str,
     robot_dofs: int = 6,
     render_size: tuple[int, int] | None = (480, 640),
+    camera_names: tuple[str, ...] = (),
+    camera_fps: float | None = None,
     realtime: bool = True,
     slowmo: float = 1.0,
     launch_viewer: bool = False,
@@ -396,6 +403,8 @@ def make_bimanual_buses(
         xml_path=xml_path,
         robot_dofs=robot_dofs,
         render_size=render_size,
+        camera_names=camera_names,
+        camera_fps=camera_fps,
         realtime=realtime,
         slowmo=slowmo,
         launch_viewer=launch_viewer,
