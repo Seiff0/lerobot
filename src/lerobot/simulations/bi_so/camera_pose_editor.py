@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import tempfile
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from lerobot.robots.bi_so_follower_simulated.mujoco.bridge import Task2SharedBackend as _TeleopSharedBackend
 from lerobot.utils.utils import init_logging
 
 
@@ -23,6 +23,20 @@ class CameraEntry:
     camera_id: int
     parent_body_name: str | None
     proxy_body_name: str
+
+
+PREFERRED_START_CAMERAS = (
+    "camera_right_arm",
+    "camera_left_arm",
+    "right_arm",
+    "left_arm",
+    "camera_front",
+    "camera_top",
+)
+
+# Editor-only inspection pose. This keeps the wrist/gripper out of the floor and
+# makes the arm-mounted cameras easier to tune than the folded teleop startup pose.
+EDITOR_ARM_QPOS_DEG = np.array([0.0, -90.0, 90.0, 0.0, 0.0, 0.0], dtype=float)
 
 
 def _fmt(values: np.ndarray) -> str:
@@ -114,8 +128,43 @@ def _viewer_world_pose(viewer) -> tuple[np.ndarray, np.ndarray]:
     return pos, rot
 
 
-def _proxy_name(camera_name: str) -> str:
-    return f"camera_pose_proxy__{camera_name}"
+def _resolve_scene_root(xml_path: Path) -> tuple[Path, Path | None]:
+    requested_path = xml_path.resolve()
+    top_level_name = "lerobot_pick_place_cube_cameras.xml"
+    top_level_path = requested_path.with_name(top_level_name)
+    arm_camera_files = {"so_arm100_left_camera.xml", "so_arm100_right_camera.xml"}
+
+    # If the user points the editor at an individual arm-camera XML, still load the
+    # full bimanual scene so the arm pose matches the normal simulation.
+    if requested_path.name in arm_camera_files and top_level_path.exists():
+        return top_level_path, requested_path
+
+    return requested_path, None
+
+
+def _load_scene_with_teleop_startup(xml_path: Path) -> _TeleopSharedBackend:
+    backend = _TeleopSharedBackend(
+        xml_path=str(xml_path),
+        render_size=None,
+        launch_viewer=False,
+    )
+    if not np.any(backend._ctrl_target) and np.allclose(backend._read_actuated_joint_qpos_rad(), 0.0):
+        backend._apply_startup_pose()
+    else:
+        mujoco.mj_forward(backend.model, backend.data)
+    return backend
+
+
+def _apply_editor_inspection_pose(backend: _TeleopSharedBackend) -> None:
+    qpos_rad = np.deg2rad(EDITOR_ARM_QPOS_DEG)
+    backend.sim.apply_home_pose(qpos_rad, qpos_rad)
+    backend._ctrl_target[:] = np.asarray(backend.data.ctrl, dtype=float)
+    if backend.nu > 0:
+        lo = backend.model.actuator_ctrlrange[:, 0]
+        hi = backend.model.actuator_ctrlrange[:, 1]
+        backend._ctrl_target[:] = np.clip(backend._ctrl_target, lo, hi)
+        backend.data.ctrl[:] = backend._ctrl_target
+    mujoco.mj_forward(backend.model, backend.data)
 
 
 def _collect_camera_entries(
@@ -169,7 +218,7 @@ def _collect_camera_entries(
             file_path=xml_path,
             camera_id=camera_id,
             parent_body_name=body_name_by_elem_id.get(id(elem)),
-            proxy_body_name=_proxy_name(camera_name),
+            proxy_body_name="",
         )
 
     return entries
@@ -198,90 +247,24 @@ def _write_camera_pose(entry: CameraEntry, local_pos: np.ndarray, local_quat: np
     tree.write(entry.file_path, encoding="utf-8", xml_declaration=False)
 
 
-def _build_temp_xml(root_xml_path: Path, model: mujoco.MjModel, data: mujoco.MjData, entries: list[CameraEntry]) -> Path:
-    tree = ET.parse(root_xml_path)
-    xml_root = tree.getroot()
-    worldbody = xml_root.find("worldbody")
-    if worldbody is None:
-        raise ValueError(f"No <worldbody> found in {root_xml_path}.")
-
-    for entry in entries:
-        world_pos, world_rot = _camera_world_pose(model, data, entry.camera_id)
-        body = ET.SubElement(
-            worldbody,
-            "body",
-            name=entry.proxy_body_name,
-            pos=_fmt(world_pos),
-            quat=_fmt(_matrix_to_quat(world_rot)),
-        )
-        ET.SubElement(body, "freejoint")
-        ET.SubElement(
-            body,
-            "geom",
-            type="sphere",
-            size="0.03",
-            rgba="1 0.85 0.15 0.95",
-            contype="0",
-            conaffinity="0",
-            density="10",
-        )
-
-    ET.indent(tree, space="  ")
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".xml",
-        prefix="camera_pose_editor_",
-        dir=root_xml_path.parent,
-        delete=False,
-        encoding="utf-8",
-    ) as handle:
-        tree.write(handle, encoding="unicode", xml_declaration=False)
-        return Path(handle.name)
-
-
-def _proxy_qpos_addr(model: mujoco.MjModel, body_name: str) -> int:
-    body_id = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name))
-    if body_id < 0:
-        raise ValueError(f"Unknown proxy body '{body_name}'.")
-    joint_id = int(model.body_jntadr[body_id])
-    if joint_id < 0:
-        raise ValueError(f"Proxy body '{body_name}' has no joint.")
-    return int(model.jnt_qposadr[joint_id])
-
-
-def _set_proxy_world_pose(
-    model: mujoco.MjModel,
-    data: mujoco.MjData,
-    body_name: str,
-    world_pos: np.ndarray,
-    world_rot: np.ndarray,
-) -> None:
-    qpos_adr = _proxy_qpos_addr(model, body_name)
-    data.qpos[qpos_adr : qpos_adr + 3] = np.asarray(world_pos, dtype=float)
-    data.qpos[qpos_adr + 3 : qpos_adr + 7] = _matrix_to_quat(world_rot)
-    mujoco.mj_forward(model, data)
-
-
-def _proxy_world_pose(model: mujoco.MjModel, data: mujoco.MjData, body_name: str) -> tuple[np.ndarray, np.ndarray]:
-    body_id = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name))
-    if body_id < 0:
-        raise ValueError(f"Unknown proxy body '{body_name}'.")
-    pos = np.asarray(data.xpos[body_id], dtype=float).copy()
-    rot = np.asarray(data.xmat[body_id], dtype=float).reshape(3, 3).copy()
-    return pos, rot
-
-
-def _proxy_positions(model: mujoco.MjModel, data: mujoco.MjData, entries: list[CameraEntry]) -> list[np.ndarray]:
+def _camera_positions(model: mujoco.MjModel, data: mujoco.MjData, entries: list[CameraEntry]) -> list[np.ndarray]:
     positions: list[np.ndarray] = []
     for entry in entries:
-        body_id = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, entry.proxy_body_name))
-        if body_id >= 0:
-            positions.append(np.asarray(data.xpos[body_id], dtype=float).copy())
+        world_pos, _ = _camera_world_pose(model, data, entry.camera_id)
+        positions.append(world_pos)
     return positions
 
 
+def _entry_focus_point(model: mujoco.MjModel, data: mujoco.MjData, entry: CameraEntry) -> np.ndarray:
+    if entry.parent_body_name is not None:
+        body_pos, _ = _body_world_pose(model, data, entry.parent_body_name)
+        return body_pos
+    world_pos, _ = _camera_world_pose(model, data, entry.camera_id)
+    return world_pos
+
+
 def _focus_on_entries(viewer, model: mujoco.MjModel, data: mujoco.MjData, entries: list[CameraEntry]) -> None:
-    positions = _proxy_positions(model, data, entries)
+    positions = _camera_positions(model, data, entries)
     if not positions:
         return
 
@@ -298,31 +281,35 @@ def _focus_on_entries(viewer, model: mujoco.MjModel, data: mujoco.MjData, entrie
 
 
 def _focus_on_entry(viewer, model: mujoco.MjModel, data: mujoco.MjData, entry: CameraEntry) -> None:
-    world_pos, _ = _proxy_world_pose(model, data, entry.proxy_body_name)
+    focus_pos = _entry_focus_point(model, data, entry)
     viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    viewer.cam.lookat[:] = world_pos
-    viewer.cam.distance = 0.25
-    viewer.cam.azimuth = 140.0
-    viewer.cam.elevation = -20.0
+    viewer.cam.lookat[:] = focus_pos
+    viewer.cam.distance = 0.18 if entry.parent_body_name is not None else 0.28
+    viewer.cam.azimuth = 155.0
+    viewer.cam.elevation = -18.0
     viewer.sync()
 
 
-def _apply_proxy_to_camera(model: mujoco.MjModel, data: mujoco.MjData, entry: CameraEntry) -> tuple[np.ndarray, np.ndarray]:
-    proxy_pos, proxy_rot = _proxy_world_pose(model, data, entry.proxy_body_name)
-    parent_pos, parent_rot = _body_world_pose(model, data, entry.parent_body_name)
-    local_pos = parent_rot.T @ (proxy_pos - parent_pos)
-    local_rot = parent_rot.T @ proxy_rot
-    local_quat = _matrix_to_quat(local_rot)
-    model.cam_pos[entry.camera_id] = local_pos
-    model.cam_quat[entry.camera_id] = local_quat
+def _set_camera_local_pose(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    entry: CameraEntry,
+    local_pos: np.ndarray,
+    local_quat: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    model.cam_pos[entry.camera_id] = np.asarray(local_pos, dtype=float)
+    model.cam_quat[entry.camera_id] = _normalize(np.asarray(local_quat, dtype=float))
     mujoco.mj_forward(model, data)
-    return local_pos, local_quat
+    return np.asarray(model.cam_pos[entry.camera_id], dtype=float).copy(), np.asarray(model.cam_quat[entry.camera_id], dtype=float).copy()
 
 
 def _capture_viewer_pose(model: mujoco.MjModel, data: mujoco.MjData, entry: CameraEntry, viewer) -> tuple[np.ndarray, np.ndarray]:
     world_pos, world_rot = _viewer_world_pose(viewer)
-    _set_proxy_world_pose(model, data, entry.proxy_body_name, world_pos, world_rot)
-    return _apply_proxy_to_camera(model, data, entry)
+    parent_pos, parent_rot = _body_world_pose(model, data, entry.parent_body_name)
+    local_pos = parent_rot.T @ (world_pos - parent_pos)
+    local_rot = parent_rot.T @ world_rot
+    local_quat = _matrix_to_quat(local_rot)
+    return _set_camera_local_pose(model, data, entry, local_pos, local_quat)
 
 
 def _nudge_proxy_local(
@@ -331,15 +318,20 @@ def _nudge_proxy_local(
     entry: CameraEntry,
     delta_local: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    world_pos, world_rot = _proxy_world_pose(model, data, entry.proxy_body_name)
+    world_pos, world_rot = _camera_world_pose(model, data, entry.camera_id)
     world_delta = world_rot @ np.asarray(delta_local, dtype=float)
-    _set_proxy_world_pose(model, data, entry.proxy_body_name, world_pos + world_delta, world_rot)
-    return _apply_proxy_to_camera(model, data, entry)
+    new_world_pos = world_pos + world_delta
+    parent_pos, parent_rot = _body_world_pose(model, data, entry.parent_body_name)
+    local_pos = parent_rot.T @ (new_world_pos - parent_pos)
+    local_rot = parent_rot.T @ world_rot
+    local_quat = _matrix_to_quat(local_rot)
+    return _set_camera_local_pose(model, data, entry, local_pos, local_quat)
 
 
 def _print_camera_status(model: mujoco.MjModel, data: mujoco.MjData, entry: CameraEntry) -> None:
-    world_pos, world_rot = _proxy_world_pose(model, data, entry.proxy_body_name)
-    local_pos, local_quat = _apply_proxy_to_camera(model, data, entry)
+    world_pos, world_rot = _camera_world_pose(model, data, entry.camera_id)
+    local_pos = np.asarray(model.cam_pos[entry.camera_id], dtype=float).copy()
+    local_quat = np.asarray(model.cam_quat[entry.camera_id], dtype=float).copy()
     print()
     print(f"camera: {entry.name}")
     print(f"file:   {entry.file_path}")
@@ -350,7 +342,8 @@ def _print_camera_status(model: mujoco.MjModel, data: mujoco.MjData, entry: Came
 
 
 def _save_entry(model: mujoco.MjModel, data: mujoco.MjData, entry: CameraEntry) -> None:
-    local_pos, local_quat = _apply_proxy_to_camera(model, data, entry)
+    local_pos = np.asarray(model.cam_pos[entry.camera_id], dtype=float).copy()
+    local_quat = np.asarray(model.cam_quat[entry.camera_id], dtype=float).copy()
     _write_camera_pose(entry, local_pos, local_quat)
     print()
     print(f"saved {entry.name} to {entry.file_path}")
@@ -371,29 +364,38 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _default_camera_index(camera_names: list[str]) -> int:
+    for preferred_name in PREFERRED_START_CAMERAS:
+        if preferred_name in camera_names:
+            return camera_names.index(preferred_name)
+    return 0
+
+
 def main() -> int:
     args = _parse_args()
     init_logging()
 
-    root_xml_path = Path(args.xml_path).resolve()
-    if not root_xml_path.exists():
-        raise FileNotFoundError(f"XML not found: {root_xml_path}")
+    requested_xml_path = Path(args.xml_path).resolve()
+    if not requested_xml_path.exists():
+        raise FileNotFoundError(f"XML not found: {requested_xml_path}")
 
-    base_model = mujoco.MjModel.from_xml_path(str(root_xml_path))
-    base_data = mujoco.MjData(base_model)
-    key_id = int(mujoco.mj_name2id(base_model, mujoco.mjtObj.mjOBJ_KEY, "home"))
-    if key_id >= 0:
-        mujoco.mj_resetDataKeyframe(base_model, base_data, key_id)
-    else:
-        mujoco.mj_resetData(base_model, base_data)
-    mujoco.mj_forward(base_model, base_data)
+    root_xml_path, source_file_filter = _resolve_scene_root(requested_xml_path)
+
+    base_backend = _load_scene_with_teleop_startup(root_xml_path)
+    _apply_editor_inspection_pose(base_backend)
+    base_model = base_backend.model
+    base_data = base_backend.data
 
     entries_by_name = _collect_camera_entries(root_xml_path, base_model)
+    if source_file_filter is not None:
+        entries_by_name = {
+            name: entry for name, entry in entries_by_name.items() if entry.file_path.resolve() == source_file_filter
+        }
     if not entries_by_name:
-        raise ValueError(f"No cameras found in {root_xml_path}.")
+        raise ValueError(f"No cameras found in {requested_xml_path}.")
 
     camera_names = sorted(entries_by_name)
-    current_index = 0
+    current_index = _default_camera_index(camera_names)
     move_step = float(args.move_step)
     if args.camera is not None:
         if args.camera not in entries_by_name:
@@ -401,16 +403,9 @@ def main() -> int:
             raise ValueError(f"Unknown camera '{args.camera}'. Available cameras: {supported}")
         current_index = camera_names.index(args.camera)
 
-    temp_xml_path = _build_temp_xml(root_xml_path, base_model, base_data, [entries_by_name[name] for name in camera_names])
     try:
-        model = mujoco.MjModel.from_xml_path(str(temp_xml_path))
-        data = mujoco.MjData(model)
-        key_id = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home"))
-        if key_id >= 0:
-            mujoco.mj_resetDataKeyframe(model, data, key_id)
-        else:
-            mujoco.mj_resetData(model, data)
-        mujoco.mj_forward(model, data)
+        model = base_model
+        data = base_data
 
         def current_entry() -> CameraEntry:
             return entries_by_name[camera_names[current_index]]
@@ -488,7 +483,6 @@ def main() -> int:
 
         with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
             viewer_holder["viewer"] = viewer
-            _focus_on_entries(viewer, model, data, [entries_by_name[name] for name in camera_names])
             print("camera pose editor")
             print("  n / b : next / previous camera")
             print("  f     : free-view focus on selected camera marker")
@@ -511,7 +505,7 @@ def main() -> int:
                 time.sleep(max(1.0 / float(args.fps), 0.001))
     finally:
         try:
-            temp_xml_path.unlink(missing_ok=True)
+            base_backend.sim.close()
         except Exception:
             pass
 

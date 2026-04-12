@@ -126,7 +126,7 @@
                   <geom class="finger_collision" name="moving_jaw_pad_2" size="0.001 0.005 0.006" pos="-0.0093 -0.067 0"/>
                   <geom class="finger_collision" name="moving_jaw_pad_3" size="0.001 0.01 0.006" pos="-0.0073 -0.055 0"/>
                   <geom class="finger_collision" name="moving_jaw_pad_4" size="0.001 0.01 0.008" pos="-0.0073 -0.035 0"/>
-                  <camera name="camera_left_arm" pos="-0.002 -0.038 0.032" euler="1.57079 0 3.14159" mode="fixed"/>
+                  <camera name="camera_left_arm" pos="-0.002 -0.038 0.032" xyaxes="-1 0 0 0 0 1" mode="fixed"/>
                   <site name="ee_site" pos="-0.009 -0.085 0" size="0.008" rgba="0 1 0 1"/>
                 </body>
               </body>
