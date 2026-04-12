@@ -29,9 +29,13 @@
       <geom friction="0.5" condim="4" pos="0 0 0" size="0.035 0.015 0.015" type="box" name="red_box" rgba="0.5 0 0 1" priority="1"/>
     </body>
 
-    <camera name="camera_front" pos="0.049 0.5 0.225" xyaxes="-0.998 0.056 -0.000 -0.019 -0.335 0.942"/>
-    <camera name="camera_top" pos="0 0.1 0.6" euler="0 0 0" mode="fixed"/>
-    <camera name="camera_vizu" pos="-0.1 0.6 0.3" quat="-0.15 -0.1 0.6 1"/>
+    <!-- <camera name="camera_front" pos="0.049 0.5 0.225" xyaxes="-0.998 0.056 -0.000 -0.019 -0.335 0.942"/> -->
+    <!-- <camera name="camera_top" pos="0 0.1 0.6" euler="0 0 0" mode="fixed"/> -->
+    <camera name="camera_front" pos="1.270 0.389 0.234" xyaxes="0.011 1.000 -0.000 -0.129 0.001 0.992" mode="fixed"/>
+    <camera name="camera-top" pos="0.000 0.390 1.870" xyaxes="1.000 0.000 0.000 0.000 1.000 0.000" mode="fixed"/>
+
+    <!-- <camera name="camera_gripper_1" pos="-0.001 0.403 0.071" xyaxes="1.000 -0.011 -0.000 0.011 0.986 0.167"/> -->
+
   
     <geom name="target_region" type="box" pos=".2 .2 0.02" axisangle="0 0 1 0.7853" size="0.02 0.04 0.02" rgba="0 0 1 0.3"  contype="0" conaffinity="0"/>
   </worldbody>
