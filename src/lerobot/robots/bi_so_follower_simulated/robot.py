@@ -126,6 +126,8 @@ class BiSOFollowerSimulated(Robot):
                 xml_path=str(xml_path),
                 robot_dofs=self.config.robot_dofs,
                 render_size=render_size,
+                camera_names=self.config.camera_names,
+                camera_fps=self.config.camera_fps,
                 realtime=self.config.realtime,
                 slowmo=self.config.slowmo,
                 launch_viewer=self.config.launch_viewer,
@@ -301,6 +303,14 @@ class BiSOFollowerSimulated(Robot):
             raise RuntimeError("Simulation backend is not initialized.")
         return self._backend.get_state()
 
+    def _peek_backend_state(self) -> Any:
+        if self._backend is None:
+            raise RuntimeError("Simulation backend is not initialized.")
+        peek_state = getattr(self._backend, "peek_state", None)
+        if callable(peek_state):
+            return peek_state()
+        return self._backend.get_state()
+
     def _get_arm_sim_qpos_deg(self, arm_index: int, state: Any | None = None) -> np.ndarray:
         state = self._get_backend_state() if state is None else state
         start = arm_index * self.config.robot_dofs
@@ -338,8 +348,8 @@ class BiSOFollowerSimulated(Robot):
         sim_qpos[GRIPPER_INDEX] = self._gripper_percent_to_deg(arm_index, sim_qpos[GRIPPER_INDEX])
         return sim_qpos
 
-    def _current_motor_positions(self) -> dict[str, float]:
-        state = self._get_backend_state()
+    def _current_motor_positions(self, state: Any | None = None) -> dict[str, float]:
+        state = self._get_backend_state() if state is None else state
         positions: dict[str, float] = {}
         for arm_index, arm_prefix in enumerate(ARM_PREFIXES):
             robot_qpos = self._sim_to_robot_arm_units(arm_index, self._get_arm_sim_qpos_deg(arm_index, state))
@@ -384,7 +394,7 @@ class BiSOFollowerSimulated(Robot):
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
         state = self._get_backend_state()
-        observation = self._current_motor_positions()
+        observation = self._current_motor_positions(state)
         for camera_name in self.cameras:
             observation[camera_name] = self._camera_image(state.images, camera_name)
         return observation
@@ -403,7 +413,7 @@ class BiSOFollowerSimulated(Robot):
                     requested_action[r] = value
 
 
-        current_positions = self._current_motor_positions()
+        current_positions = self._current_motor_positions(self._peek_backend_state())
         # safe_requested_action = requested_action
         safe_requested_action = self._clip_requested_action(requested_action, current_positions)
 

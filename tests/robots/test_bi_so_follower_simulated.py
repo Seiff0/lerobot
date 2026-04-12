@@ -45,6 +45,7 @@ class _Backend:
     def __init__(self, render_size):
         self.robot_dofs = 6
         self.num_arms = 2
+        self.get_state_calls = 0
         ctrlrange_deg = np.array(
             [
                 [-120, 120],
@@ -89,6 +90,7 @@ class _Backend:
         self._refcount = max(0, self._refcount - 1)
 
     def get_state(self):
+        self.get_state_calls += 1
         return _State(self._state.qpos_deg.copy(), {k: v.copy() for k, v in self._state.images.items()})
 
     def set_arm_target_deg(self, arm_index, q_deg):
@@ -143,6 +145,7 @@ def test_bi_so_follower_simulated_routes_actions_and_observations(tmp_path: Path
     assert robot.is_connected
 
     observation = robot.get_observation()
+    assert robot._backend.get_state_calls == 1
     assert observation["left_shoulder_pan.pos"] == pytest.approx(10.0)
     assert observation["right_shoulder_pan.pos"] == pytest.approx(-10.0)
     assert observation["left_gripper.pos"] == pytest.approx(25.0)
@@ -160,8 +163,10 @@ def test_bi_so_follower_simulated_routes_actions_and_observations(tmp_path: Path
         "left_shoulder_pan.pos": 15.0,
         "right_gripper.pos": 60.0,
     }
+    assert robot._backend.get_state_calls == 2
 
     observation = robot.get_observation()
+    assert robot._backend.get_state_calls == 3
     assert observation["left_shoulder_pan.pos"] == pytest.approx(15.0)
     assert observation["right_gripper.pos"] == pytest.approx(60.0)
     assert observation["right_shoulder_pan.pos"] == pytest.approx(-10.0)

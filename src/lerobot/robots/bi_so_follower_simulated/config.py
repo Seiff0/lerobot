@@ -33,6 +33,7 @@ class BiSOFollowerSimulatedConfig(RobotConfig):
     robot_dofs: int = 6
     render_size: tuple[int, int] | None = None
     camera_names: tuple[str, ...] = field(default_factory=tuple)
+    camera_fps: float | None = None
 
     realtime: bool = True
     slowmo: float = 1.0

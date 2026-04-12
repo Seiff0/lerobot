@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 import mujoco
@@ -23,6 +24,8 @@ class Task2SharedBackend(_BaseTask2SharedBackend):
         xml_path: str,
         robot_dofs: int = 6,
         render_size: tuple[int, int] | None = (480, 640),
+        camera_names: tuple[str, ...] = (),
+        camera_fps: float | None = None,
         realtime: bool = True,
         slowmo: float = 1.0,
         launch_viewer: bool = False,
@@ -31,11 +34,21 @@ class Task2SharedBackend(_BaseTask2SharedBackend):
             xml_path=xml_path,
             robot_dofs=robot_dofs,
             render_size=render_size,
+            camera_names=camera_names,
+            camera_fps=camera_fps,
             realtime=realtime,
             slowmo=slowmo,
             launch_viewer=launch_viewer,
         )
-        self._last_step_t: float | None = None
+        requested_names = tuple(camera_names or SIM_CAMERA_SPECS.keys())
+        self._camera_specs = [SIM_CAMERA_SPECS[name] for name in requested_names if name in SIM_CAMERA_SPECS]
+        self._camera_period_s = None if camera_fps is None or camera_fps <= 0 else 1.0 / float(camera_fps)
+        self._last_render_t: float | None = None
+
+    def _ensure_renderer(self) -> None:
+        if self.render_size is None or self._renderer is not None:
+            return
+        self._renderer = mujoco.Renderer(self.model, height=self.height, width=self.width)
 
     def start(self) -> None:
         with self._lock:
@@ -44,10 +57,13 @@ class Task2SharedBackend(_BaseTask2SharedBackend):
                 return
             if not np.any(self._ctrl_target) and np.allclose(self._read_actuated_joint_qpos_rad(), 0.0):
                 self._apply_startup_pose()
+            self._ensure_renderer()
             self._running = True
-            self._last_step_t = time.perf_counter()
             self._state.qpos_deg = np.rad2deg(self._read_actuated_joint_qpos_rad()).astype(np.float32)
-            self._state.images = self._render_images()
+            self._state.images = {}
+
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         with self._lock:
@@ -56,47 +72,63 @@ class Task2SharedBackend(_BaseTask2SharedBackend):
                 return
             self._running = False
 
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+
         self.sim.close()
 
-    def _advance_simulation(self) -> None:
-        if not self._running:
-            return
-
+    def _loop(self) -> None:
         dt = float(self.model.opt.timestep) * int(self.sim.substeps)
-        now = time.perf_counter()
 
-        if self._last_step_t is None:
-            step_count = 1
-        elif self.realtime:
-            target_elapsed = max(now - self._last_step_t, 0.0)
-            step_count = max(1, int(round(target_elapsed / max(dt * self.slowmo, 1e-6))))
-        else:
-            step_count = 1
+        while True:
+            with self._lock:
+                if not self._running:
+                    break
+                if self.nu > 0:
+                    self.data.ctrl[:] = self._ctrl_target
 
-        if self.nu > 0:
-            self.data.ctrl[:] = self._ctrl_target
-
-        for _ in range(step_count):
+            tick_start = time.perf_counter()
             self.sim.step()
 
-        self._last_step_t = now
-        self._state.qpos_deg = np.rad2deg(self._read_actuated_joint_qpos_rad()).astype(np.float32)
-        self._state.images = self._render_images()
+            with self._lock:
+                self._state.qpos_deg = np.rad2deg(self._read_actuated_joint_qpos_rad()).astype(np.float32)
+
+            if self.realtime:
+                elapsed = time.perf_counter() - tick_start
+                time.sleep(max(0.0, dt * self.slowmo - elapsed))
 
     def get_state(self):
         with self._lock:
-            self._advance_simulation()
+            self._state.images = self._render_images()
+            return _SharedState(
+                qpos_deg=self._state.qpos_deg.copy(),
+                images={name: image.copy() for name, image in self._state.images.items()},
+            )
+
+    def peek_state(self):
+        with self._lock:
             return _SharedState(
                 qpos_deg=self._state.qpos_deg.copy(),
                 images={name: image.copy() for name, image in self._state.images.items()},
             )
 
     def _render_images(self) -> dict[str, np.ndarray]:
+        self._ensure_renderer()
         if self._renderer is None:
             return {}
 
+        now = time.perf_counter()
+        if (
+            self._camera_period_s is not None
+            and self._last_render_t is not None
+            and (now - self._last_render_t) < self._camera_period_s
+            and self._state.images
+        ):
+            return {name: image.copy() for name, image in self._state.images.items()}
+
         images: dict[str, np.ndarray] = {}
-        for spec in SIM_CAMERA_SPECS.values():
+        for spec in self._camera_specs:
             model_name = str(spec["model_name"])
             camera_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, model_name)
             if camera_id < 0:
@@ -109,6 +141,7 @@ class Task2SharedBackend(_BaseTask2SharedBackend):
             for alias in spec["aliases"]:
                 images[str(alias)] = rendered
 
+        self._last_render_t = now
         return images
 
 
@@ -116,6 +149,8 @@ def make_bimanual_buses(
     xml_path: str,
     robot_dofs: int = 6,
     render_size: tuple[int, int] | None = (480, 640),
+    camera_names: tuple[str, ...] = (),
+    camera_fps: float | None = None,
     realtime: bool = True,
     slowmo: float = 1.0,
     launch_viewer: bool = False,
@@ -124,6 +159,8 @@ def make_bimanual_buses(
         xml_path=xml_path,
         robot_dofs=robot_dofs,
         render_size=render_size,
+        camera_names=camera_names,
+        camera_fps=camera_fps,
         realtime=realtime,
         slowmo=slowmo,
         launch_viewer=launch_viewer,
