@@ -9,6 +9,10 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+VIEWER_START_DISTANCE = 1.0
+VIEWER_START_AZIMUTH = 0.0
+VIEWER_START_ELEVATION = -35.0
+
 CAMERA_SPECS: dict[str, dict[str, str | tuple[str, ...]]] = {
     "left_arm": {
         "model_name": "camera_left_arm",
@@ -77,11 +81,28 @@ class Task2Sim:
                 show_right_ui=False,
                 key_callback=self._key_callback,
             )
+            self._configure_viewer_camera()
             if show_sites:
                 try:
                     self.viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_SITE] = 1
                 except Exception:
                     pass
+
+    def _configure_viewer_camera(self) -> None:
+        if self.viewer is None:
+            return
+
+        focus_pos = np.asarray(self.model.stat.center, dtype=float).copy()
+        cube_id = int(mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "cube"))
+        if cube_id >= 0:
+            focus_pos = np.asarray(self.data.xpos[cube_id], dtype=float).copy()
+
+        self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        self.viewer.cam.lookat[:] = focus_pos
+        self.viewer.cam.distance = VIEWER_START_DISTANCE
+        self.viewer.cam.azimuth = VIEWER_START_AZIMUTH
+        self.viewer.cam.elevation = VIEWER_START_ELEVATION
+        self.viewer.sync()
 
     def _key_callback(self, keycode: int) -> None:
         try:
@@ -107,8 +128,9 @@ class Task2Sim:
             return
 
         qadr = int(self.model.jnt_qposadr[joint_id])
-        self.data.qpos[qadr : qadr + 3] = np.array([0.2, 0.2, z], dtype=float)
-        self.data.qpos[qadr + 3 : qadr + 7] = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+        # Preserve the XML-authored free-joint pose and only lift the cube in z
+        # so scene edits remain visible in teleop, recording, and the camera editor.
+        self.data.qpos[qadr + 2] = float(z)
 
     def apply_home_pose(self, home_qpos: np.ndarray, home_ctrl: np.ndarray | None = None) -> None:
         qpos = np.asarray(home_qpos, dtype=float).reshape(-1)

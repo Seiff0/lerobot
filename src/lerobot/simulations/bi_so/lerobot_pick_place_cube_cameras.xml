@@ -35,8 +35,8 @@
 
     <!-- TOP BOX STL -->
     <mesh name="top_box_mesh"
-          file="/home/manpreet/rc/lerobot/src/lerobot/robots/bi_so_follower_simulated/mujoco/assets/top-box.stl"
-          scale="0.0025 0.0025 0.0015"/>
+          file="top-box.stl"
+          scale="0.0025 0.003 0.001"/>
   </asset>
 
   <worldbody>
@@ -53,15 +53,15 @@
           friction="0.1"/>
 
     <!-- ================= RED BOX ================= -->
-    <body name="cube" pos="0.0 0.25 0.025" axisangle="0 0 1 0.7853">
+    <body name="cube" pos="0.0 0.25 0.025" axisangle="0 0 1 1.5708">
       <freejoint name="red_box_joint"/>
-      <inertial pos="0.50 0 0"
+      <inertial pos="0 0 0"
                 mass="1"
                 diaginertia="0.00016667 0.00016667 0.00016667"/>
       <geom name="red_box"
             type="box"
             size="0.1 0.025 0.025"
-            pos="0.50 0 0"
+            pos="0 -0.125 0"
             rgba="0.5 0 0 1"
             friction="0.5"
             condim="4"
@@ -69,7 +69,7 @@
     </body>
 
     <!-- ================= TOP BOX (STL) ================= -->
-    <body name="top_box" pos="0.40 0.25 0.01">
+    <body name="top_box" pos="0.50 0.12 0.01">
 
       <freejoint name="top_box_joint"/>
 

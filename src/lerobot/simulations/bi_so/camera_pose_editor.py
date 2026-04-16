@@ -263,6 +263,16 @@ def _entry_focus_point(model: mujoco.MjModel, data: mujoco.MjData, entry: Camera
     return world_pos
 
 
+def _startup_focus_point(model: mujoco.MjModel, data: mujoco.MjData, entry: CameraEntry) -> np.ndarray:
+    if entry.parent_body_name is not None:
+        try:
+            cube_pos, _ = _body_world_pose(model, data, "cube")
+            return cube_pos
+        except ValueError:
+            pass
+    return _entry_focus_point(model, data, entry)
+
+
 def _focus_on_entries(viewer, model: mujoco.MjModel, data: mujoco.MjData, entries: list[CameraEntry]) -> None:
     positions = _camera_positions(model, data, entries)
     if not positions:
@@ -281,12 +291,12 @@ def _focus_on_entries(viewer, model: mujoco.MjModel, data: mujoco.MjData, entrie
 
 
 def _focus_on_entry(viewer, model: mujoco.MjModel, data: mujoco.MjData, entry: CameraEntry) -> None:
-    focus_pos = _entry_focus_point(model, data, entry)
+    focus_pos = _startup_focus_point(model, data, entry)
     viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
     viewer.cam.lookat[:] = focus_pos
-    viewer.cam.distance = 0.18 if entry.parent_body_name is not None else 0.28
-    viewer.cam.azimuth = 155.0
-    viewer.cam.elevation = -18.0
+    viewer.cam.distance = 1.0
+    viewer.cam.azimuth = 0.0
+    viewer.cam.elevation = -35.0
     viewer.sync()
 
 
