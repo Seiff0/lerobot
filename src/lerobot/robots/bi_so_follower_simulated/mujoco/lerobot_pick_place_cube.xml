@@ -1,42 +1,107 @@
 <mujoco model="lerobot-pick_n_place_cube">
-  <!-- The timestep has a big influence on the contacts stability -->
+
+  <!-- Physics -->
   <option cone="elliptic" impratio="10" timestep="0.002" gravity="0 0 -9.81"/>
 
+  <!-- Robots -->
   <include file="so_arm100.xml"/>
   <include file="so_arm100_right.xml"/>
 
   <statistic center="0 -0.2 0.1" extent="0.4"/>
 
+  <!-- Visual -->
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
     <global azimuth="140" elevation="-30" offwidth="640" offheight="640"/>
   </visual>
 
+  <!-- Assets -->
   <asset>
-    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
-    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
-      markrgb="0.8 0.8 0.8" width="300" height="300"/>
-    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <texture type="skybox" builtin="gradient"
+             rgb1="0.3 0.5 0.7" rgb2="0 0 0"
+             width="512" height="3072"/>
+
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+             markrgb="0.8 0.8 0.8"
+             width="300" height="300"/>
+
+    <material name="groundplane"
+              texture="groundplane"
+              texuniform="true"
+              texrepeat="5 5"
+              reflectance="0.2"/>
+
+    <!-- ✅ TOP BOX STL -->
+    <mesh name="top_box_mesh"
+          file="/home/manpreet/rc/lerobot/src/lerobot/robots/bi_so_follower_simulated/mujoco/assets/top-box.stl"
+          scale="0.0015 0.0015 0.0015"/>
   </asset>
 
   <worldbody>
+
+    <!-- Light -->
     <light pos="0 0 3" dir="0 0 -1" directional="false"/>
-    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" pos="0 0 0" friction="0.1"/>
+
+    <!-- Floor -->
+    <geom name="floor"
+          type="plane"
+          size="0 0 0.05"
+          material="groundplane"
+          pos="0 0 0"
+          friction="0.1"/>
+
+    <!-- ================= RED BOX ================= -->
     <body name="cube" pos="-0.25 0.25 0.01" axisangle="0 0 1 0.7853">
       <freejoint name="red_box_joint"/>
-      <inertial pos="0 0 0" mass="1" diaginertia="0.00016667 0.00016667 0.00016667"/>
-      <geom friction="0.5" condim="4" pos="0 0 0" size="0.035 0.015 0.015" type="box" name="red_box" rgba="0.5 0 0 1" priority="1"/>
+      <inertial pos="0 0 0"
+                mass="1"
+                diaginertia="0.00016667 0.00016667 0.00016667"/>
+      <geom name="red_box"
+            type="box"
+            size="0.035 0.015 0.015"
+            pos="0 0 0"
+            rgba="0.5 0 0 1"
+            friction="0.5"
+            condim="4"
+            priority="1"/>
     </body>
 
-    <!-- <camera name="camera_front" pos="0.049 0.5 0.225" xyaxes="-0.998 0.056 -0.000 -0.019 -0.335 0.942"/> -->
-    <!-- <camera name="camera_top" pos="0 0.1 0.6" euler="0 0 0" mode="fixed"/> -->
-    <camera name="camera_front" pos="1.270 0.389 0.234" xyaxes="0.011 1.000 -0.000 -0.129 0.001 0.992" mode="fixed"/>
-    <camera name="camera_top" pos="0.000 0.390 1.870" xyaxes="1.000 0.000 0.000 0.000 1.000 0.000" mode="fixed"/>
+    <!-- ================= TOP BOX (STL) ================= -->
+    <body name="top_box" pos="-0.25 0.25 0.05">
 
-    <!-- <camera name="camera_gripper_1" pos="-0.001 0.403 0.071" xyaxes="1.000 -0.011 -0.000 0.011 0.986 0.167"/> -->
+      <freejoint name="top_box_joint"/>
 
-  
+      <inertial pos="0 0 0"
+                mass="1.0"
+                diaginertia="0.0015 0.0015 0.0015"/>
+
+      <!-- Visual mesh -->
+      <geom type="mesh"
+            mesh="top_box_mesh"
+            rgba="0.7 0.7 0.7 1"/>
+
+      <!-- Collision (stable physics) -->
+      <geom type="box"
+            size="0.04 0.04 0.04"
+            rgba="0 0 0 0"
+            contype="1"
+            conaffinity="1"/>
+
+    </body>
+
+    <!-- ================= CAMERAS ================= -->
+    <camera name="camera_front"
+            pos="1.270 0.389 0.234"
+            xyaxes="0.011 1.000 -0.000 -0.129 0.001 0.992"
+            mode="fixed"/>
+
+    <camera name="camera_top"
+            pos="0.000 0.390 1.870"
+            xyaxes="1.000 0.000 0.000 0.000 1.000 0.000"
+            mode="fixed"/>
+
   </worldbody>
-  
-  </mujoco>
+
+</mujoco>
