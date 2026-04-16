@@ -16,6 +16,7 @@ from lerobot.robots.bi_so_follower_simulated.config import BiSOFollowerSimulated
 from lerobot.robots.bi_so_follower_simulated.robot import BiSOFollowerSimulated, MOTOR_NAMES
 from lerobot.simulations.bi_so.cameras import resolve_camera_assets, resolve_camera_names
 from lerobot.simulations.bi_so.single_toggle import _active_arm_index
+from lerobot.teleoperators.bi_so_leader import BiSOLeader, BiSOLeaderConfig
 from lerobot.teleoperators.so_leader import SOLeader, SOLeaderTeleopConfig
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
 from lerobot.utils.control_utils import sanity_check_dataset_robot_compatibility
@@ -108,6 +109,46 @@ def _leader_action_to_robot_array(action: dict[str, float]) -> list[float]:
     return [float(action[f"{motor_name}.pos"]) for motor_name in MOTOR_NAMES]
 
 
+def _build_teleop_controller(args: argparse.Namespace) -> tuple[SOLeader | BiSOLeader, str]:
+    has_single = args.leader_port is not None
+    has_dual = args.left_leader_port is not None or args.right_leader_port is not None
+
+    if has_single and has_dual:
+        raise ValueError("Use either `--leader-port` or both `--left-leader-port` and `--right-leader-port`, not both.")
+
+    if has_dual:
+        if args.left_leader_port is None or args.right_leader_port is None:
+            raise ValueError("Dual-arm recording requires both `--left-leader-port` and `--right-leader-port`.")
+
+        leader_cfg = BiSOLeaderConfig(
+            id=args.leader_id,
+            calibration_dir=None if args.leader_calibration_dir is None else Path(args.leader_calibration_dir),
+            left_arm_config=SOLeaderTeleopConfig(
+                port=args.left_leader_port,
+                use_degrees=args.leader_use_degrees,
+            ),
+            right_arm_config=SOLeaderTeleopConfig(
+                port=args.right_leader_port,
+                use_degrees=args.leader_use_degrees,
+            ),
+        )
+        return BiSOLeader(leader_cfg), "dual"
+
+    if args.leader_port is None:
+        raise ValueError(
+            "Recording requires either `--leader-port` for one controller, or both `--left-leader-port` and "
+            "`--right-leader-port` for two controllers."
+        )
+
+    leader_cfg = SOLeaderTeleopConfig(
+        id=args.leader_id,
+        calibration_dir=None if args.leader_calibration_dir is None else Path(args.leader_calibration_dir),
+        port=args.leader_port,
+        use_degrees=args.leader_use_degrees,
+    )
+    return SOLeader(leader_cfg), "single"
+
+
 def _get_dataset_features(robot: BiSOFollowerSimulated, args: argparse.Namespace) -> dict[str, dict]:
     return combine_feature_dicts(
         hw_to_dataset_features(robot.action_features, ACTION, use_video=args.video),
@@ -159,13 +200,7 @@ def _load_episode_actions(repo_id: str, episode: int, root: str | Path | None = 
 
 def _record(args: argparse.Namespace) -> int:
     sim_helper = _build_sim_helper(args, sim_id="bimanual_so_dataset_record")
-    leader_cfg = SOLeaderTeleopConfig(
-        id=args.leader_id,
-        calibration_dir=None if args.leader_calibration_dir is None else Path(args.leader_calibration_dir),
-        port=args.leader_port,
-        use_degrees=args.leader_use_degrees,
-    )
-    leader = SOLeader(leader_cfg)
+    leader, leader_mode = _build_teleop_controller(args)
     dataset = None
 
     try:
@@ -201,12 +236,17 @@ def _record(args: argparse.Namespace) -> int:
                 observation = sim_helper.get_observation()
                 action = _current_action_from_observation(observation)
 
-                active_arm = _active_arm_index(sim_helper._backend)
-                arm_prefix = "left" if active_arm == 0 else "right"
                 leader_action = leader.get_action()
-                leader_values = _leader_action_to_robot_array(leader_action)
-                for motor_name, value in zip(MOTOR_NAMES, leader_values, strict=True):
-                    action[f"{arm_prefix}_{motor_name}.pos"] = float(value)
+                if leader_mode == "dual":
+                    for key, value in leader_action.items():
+                        if key in action:
+                            action[key] = float(value)
+                else:
+                    active_arm = _active_arm_index(sim_helper._backend)
+                    arm_prefix = "left" if active_arm == 0 else "right"
+                    leader_values = _leader_action_to_robot_array(leader_action)
+                    for motor_name, value in zip(MOTOR_NAMES, leader_values, strict=True):
+                        action[f"{arm_prefix}_{motor_name}.pos"] = float(value)
 
                 sent_action = sim_helper.send_action(action)
                 observation_frame = build_dataset_frame(dataset.features, observation, prefix=OBS_STR)
@@ -303,7 +343,9 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
     record_parser = subparsers.add_parser("record")
-    record_parser.add_argument("--leader-port", required=True)
+    record_parser.add_argument("--leader-port", default=None)
+    record_parser.add_argument("--left-leader-port", default=None)
+    record_parser.add_argument("--right-leader-port", default=None)
     record_parser.add_argument("--leader-id", default="single_so_leader")
     record_parser.add_argument("--leader-calibration-dir", default=None)
     record_parser.add_argument("--leader-use-degrees", action="store_true", default=True)
