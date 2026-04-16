@@ -9,6 +9,27 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+CAMERA_SPECS: dict[str, dict[str, str | tuple[str, ...]]] = {
+    "left_arm": {
+        "model_name": "camera_left_arm",
+        "aliases": ("left_arm",),
+    },
+    "right_arm": {
+        "model_name": "camera_right_arm",
+        "aliases": ("right_arm",),
+    },
+    "top": {
+        "model_name": "camera_top",
+        "aliases": ("top",),
+    },
+    "front": {
+        "model_name": "camera_front",
+        "aliases": ("front",),
+    },
+}
+
+DEFAULT_CAMERA_NAMES = ("left_arm", "right_arm", "top", "front")
+
 
 class Task2Sim:
     """Small MuJoCo wrapper for the local bimanual SO-arm scene."""
@@ -165,7 +186,6 @@ class Task2SharedBackend:
         slowmo: float = 1.0,
         launch_viewer: bool = False,
     ):
-        del camera_names, camera_fps
         self.xml_path = Path(xml_path).resolve()
         self.sim = Task2Sim(
             xml_path=self.xml_path,
@@ -191,6 +211,10 @@ class Task2SharedBackend:
 
         if self.render_size is not None:
             self.height, self.width = self.render_size
+        requested_names = tuple(camera_names or DEFAULT_CAMERA_NAMES)
+        self._camera_specs = [CAMERA_SPECS[name] for name in requested_names if name in CAMERA_SPECS]
+        self._camera_period_s = None if camera_fps is None or camera_fps <= 0 else 1.0 / float(camera_fps)
+        self._last_render_t: float | None = None
 
         self._lock = threading.Lock()
         self._running = False
@@ -200,6 +224,11 @@ class Task2SharedBackend:
             qpos_deg=np.rad2deg(self._read_actuated_joint_qpos_rad()).astype(np.float32),
             images={},
         )
+
+    def _ensure_renderer(self) -> None:
+        if self.render_size is None or self._renderer is not None:
+            return
+        self._renderer = mujoco.Renderer(self.model, height=self.height, width=self.width)
 
     def _home_key_id(self) -> int:
         if int(self.model.nkey) <= 0:
@@ -268,6 +297,7 @@ class Task2SharedBackend:
             # Apply the authored startup pose once, when the first consumer connects.
             if not np.any(self._ctrl_target) and np.allclose(self._read_actuated_joint_qpos_rad(), 0.0):
                 self._apply_startup_pose()
+            self._ensure_renderer()
             self._running = True
 
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -316,19 +346,31 @@ class Task2SharedBackend:
         if self._renderer is None:
             return {}
 
+        now = time.perf_counter()
+        if (
+            self._camera_period_s is not None
+            and self._last_render_t is not None
+            and (now - self._last_render_t) < self._camera_period_s
+            and self._state.images
+        ):
+            return {name: image.copy() for name, image in self._state.images.items()}
+
         images: dict[str, np.ndarray] = {}
-        for camera_name in ("camera_front", "camera_top", "camera_vizu", "front", "top", "vizu"):
-            camera_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+        for spec in self._camera_specs:
+            model_name = str(spec["model_name"])
+            camera_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, model_name)
             if camera_id < 0:
                 continue
-            self._renderer.update_scene(self.data, camera=camera_name)
-            images[camera_name] = self._renderer.render().copy()
+            self._renderer.update_scene(self.data, camera=model_name)
+            rendered = self._renderer.render().copy()
+            images[model_name] = rendered
+            for alias in spec["aliases"]:
+                images[str(alias)] = rendered
+        self._last_render_t = now
         return images
 
     def _loop(self) -> None:
         dt = float(self.model.opt.timestep) * int(self.sim.substeps)
-        if self.render_size is not None and self._renderer is None:
-            self._renderer = mujoco.Renderer(self.model, height=self.height, width=self.width)
 
         while True:
             with self._lock:

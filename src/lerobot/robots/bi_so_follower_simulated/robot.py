@@ -42,6 +42,8 @@ GRIPPER_INDEX = len(MOTOR_NAMES) - 1
 DEFAULT_SCENE_XML = "lerobot_pick_place_cube.xml"
 DEFAULT_BRIDGE_PY = "bridge.py"
 CAMERA_ALIASES = {
+    "left_arm": ("left_arm", "camera_left_arm"),
+    "right_arm": ("right_arm", "camera_right_arm"),
     "front": ("front", "camera_front"),
     "top": ("top", "camera_top"),
 }

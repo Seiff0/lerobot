@@ -24,7 +24,7 @@ SIM_CAMERA_SPECS: dict[str, dict[str, str | tuple[str, ...]]] = {
     },
 }
 
-DEFAULT_RECORD_CAMERA_NAMES = ("left_arm", "right_arm", "top")
+DEFAULT_RECORD_CAMERA_NAMES = ("left_arm", "right_arm", "top", "front")
 
 
 def default_camera_bridge_path() -> Path:
