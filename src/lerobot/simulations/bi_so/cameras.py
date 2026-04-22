@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+"""Shared camera naming and asset-resolution helpers for BI-SO simulations."""
+
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -28,10 +30,12 @@ DEFAULT_RECORD_CAMERA_NAMES = ("left_arm", "right_arm", "top", "front")
 
 
 def default_camera_bridge_path() -> Path:
+    """Return the simulation-local bridge that knows how to render camera streams."""
     return Path(__file__).resolve().with_name("bridge.py")
 
 
 def default_camera_xml_path() -> Path:
+    """Return the top-level XML scene that includes the recording cameras."""
     return Path(__file__).resolve().with_name("lerobot_pick_place_cube_cameras.xml")
 
 
@@ -40,6 +44,7 @@ def resolve_camera_names(
     *,
     use_default_cameras: bool = False,
 ) -> tuple[str, ...]:
+    """Validate and deduplicate requested logical camera names."""
     requested_names = tuple(camera_names or ())
     if not requested_names and use_default_cameras:
         requested_names = DEFAULT_RECORD_CAMERA_NAMES
@@ -62,6 +67,7 @@ def resolve_camera_assets(
     bridge_path: str | Path | None,
     xml_path: str | Path | None,
 ) -> tuple[Path | None, Path | None]:
+    """Resolve bridge/XML paths, defaulting to the camera-enabled scene when needed."""
     if not camera_names:
         resolved_bridge = None if bridge_path is None else Path(bridge_path)
         resolved_xml = None if xml_path is None else Path(xml_path)
@@ -70,3 +76,13 @@ def resolve_camera_assets(
     resolved_bridge = default_camera_bridge_path() if bridge_path is None else Path(bridge_path)
     resolved_xml = default_camera_xml_path() if xml_path is None else Path(xml_path)
     return resolved_bridge, resolved_xml
+
+
+__all__ = [
+    "DEFAULT_RECORD_CAMERA_NAMES",
+    "SIM_CAMERA_SPECS",
+    "default_camera_bridge_path",
+    "default_camera_xml_path",
+    "resolve_camera_assets",
+    "resolve_camera_names",
+]

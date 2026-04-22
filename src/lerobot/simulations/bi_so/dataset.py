@@ -14,7 +14,7 @@ from lerobot.datasets.feature_utils import build_dataset_frame, combine_feature_
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.bi_so_follower_simulated.config import BiSOFollowerSimulatedConfig
 from lerobot.robots.bi_so_follower_simulated.robot import BiSOFollowerSimulated, MOTOR_NAMES
-from lerobot.simulations.bi_so.cameras import resolve_camera_assets, resolve_camera_names
+from lerobot.simulations.bi_so.cameras import SIM_CAMERA_SPECS, resolve_camera_assets, resolve_camera_names
 from lerobot.simulations.bi_so.single_toggle import _active_arm_index
 from lerobot.teleoperators.bi_so_leader import BiSOLeader, BiSOLeaderConfig
 from lerobot.teleoperators.so_leader import SOLeader, SOLeaderTeleopConfig
@@ -80,8 +80,42 @@ def _add_sim_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--render-width", type=int, default=320)
 
 
+def _camera_names_from_dataset(dataset: LeRobotDataset) -> tuple[str, ...]:
+    feature_names = set(dataset.features)
+    dataset_camera_names: list[str] = []
+
+    for camera_name, spec in SIM_CAMERA_SPECS.items():
+        candidates = {camera_name, str(spec["model_name"]), *[str(alias) for alias in spec["aliases"]]}
+        if any(f"{OBS_STR}.images.{candidate}" in feature_names for candidate in candidates):
+            dataset_camera_names.append(camera_name)
+
+    return tuple(dataset_camera_names)
+
+
+def _resolve_run_camera_names(args: argparse.Namespace) -> tuple[str, ...]:
+    requested_camera_names = resolve_camera_names(args.camera_names, use_default_cameras=args.use_default_cameras)
+    if not args.resume or args.camera_names:
+        return requested_camera_names
+
+    try:
+        existing_dataset = LeRobotDataset(args.repo_id, root=args.root)
+    except Exception:
+        return requested_camera_names
+
+    dataset_camera_names = _camera_names_from_dataset(existing_dataset)
+    if dataset_camera_names:
+        logger.info(
+            "Resuming dataset '%s' with its existing camera set: %s.",
+            args.repo_id,
+            ", ".join(dataset_camera_names),
+        )
+        return dataset_camera_names
+
+    return requested_camera_names
+
+
 def _build_sim_helper(args: argparse.Namespace, *, sim_id: str) -> BiSOFollowerSimulated:
-    camera_names = resolve_camera_names(args.camera_names, use_default_cameras=args.use_default_cameras)
+    camera_names = _resolve_run_camera_names(args)
     bridge_path, xml_path = resolve_camera_assets(
         camera_names,
         bridge_path=args.bridge_path,

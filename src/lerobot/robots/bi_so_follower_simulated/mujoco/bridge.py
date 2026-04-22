@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Core MuJoCo backend for the BI-SO simulated follower robot.
+
+This module still exposes the historic ``Task2*`` symbols because older scripts
+and configs refer to them. Newer code should prefer the clearer ``BiSO*``
+aliases exported at the bottom of the file.
+"""
+
 import threading
 import time
 from dataclasses import dataclass
@@ -9,6 +16,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+# Shared free-camera pose used by teleop, viewer-only mode, and dataset record.
 VIEWER_START_DISTANCE = 1.0
 VIEWER_START_AZIMUTH = 0.0
 VIEWER_START_ELEVATION = -35.0
@@ -36,7 +44,7 @@ DEFAULT_CAMERA_NAMES = ("left_arm", "right_arm", "top", "front")
 
 
 class Task2Sim:
-    """Small MuJoCo wrapper for the local bimanual SO-arm scene."""
+    """Low-level MuJoCo scene wrapper for the local bimanual SO-arm scene."""
 
     def __init__(
         self,
@@ -195,7 +203,7 @@ class _SharedState:
 
 
 class Task2SharedBackend:
-    """Shared MuJoCo backend for both arm bus views."""
+    """Shared MuJoCo backend for both simulated arm buses."""
 
     def __init__(
         self,
@@ -298,6 +306,9 @@ class Task2SharedBackend:
         return _HomePose(qpos=qpos, ctrl=ctrl)
 
     def _apply_startup_pose(self) -> None:
+        # Mirror the authored MuJoCo keyframe startup rather than inventing a
+        # separate Python-only reset pose. That keeps teleop, recording, and the
+        # camera editor aligned.
         home_pose = self._extract_first_arm_home_pose()
         if home_pose is not None:
             self.sim.apply_home_pose(home_pose.qpos, home_pose.ctrl)
@@ -463,6 +474,7 @@ def make_bimanual_buses(
     slowmo: float = 1.0,
     launch_viewer: bool = False,
 ) -> tuple[Task2SharedBackend, dict[str, Task2ArmBus]]:
+    """Build the shared backend and its two arm bus adapters."""
     backend = Task2SharedBackend(
         xml_path=xml_path,
         robot_dofs=robot_dofs,
@@ -480,3 +492,29 @@ def make_bimanual_buses(
 def make_task2_bimanual_buses(*args, **kwargs):
     """Compatibility alias for older configs/scripts."""
     return make_bimanual_buses(*args, **kwargs)
+
+
+def make_bi_so_buses(*args, **kwargs):
+    """Preferred descriptive factory alias for the BI-SO MuJoCo bridge."""
+    return make_bimanual_buses(*args, **kwargs)
+
+
+# Preferred descriptive names.
+BiSOMujocoScene = Task2Sim
+BiSOSharedMujocoBackend = Task2SharedBackend
+BiSOArmBus = Task2ArmBus
+
+__all__ = [
+    "BiSOArmBus",
+    "BiSOMujocoScene",
+    "BiSOSharedMujocoBackend",
+    "CAMERA_SPECS",
+    "DEFAULT_CAMERA_NAMES",
+    "Task2ArmBus",
+    "Task2SharedBackend",
+    "Task2Sim",
+    "_SharedState",
+    "make_bi_so_buses",
+    "make_bimanual_buses",
+    "make_task2_bimanual_buses",
+]

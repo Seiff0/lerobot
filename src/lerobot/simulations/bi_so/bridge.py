@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+"""Simulation-local bridge for BI-SO dataset cameras.
+
+The robot package bridge handles shared MuJoCo state and arm control. This file
+only layers on the extra rendered camera streams used by dataset recording.
+"""
+
 import threading
 import time
 
@@ -9,15 +15,15 @@ import mujoco
 import numpy as np
 
 from lerobot.robots.bi_so_follower_simulated.mujoco.bridge import (
-    Task2ArmBus,
-    Task2SharedBackend as _BaseTask2SharedBackend,
+    BiSOArmBus,
+    BiSOSharedMujocoBackend as _BaseBiSOSharedMujocoBackend,
     _SharedState,
 )
 from lerobot.simulations.bi_so.cameras import SIM_CAMERA_SPECS
 
 
-class Task2SharedBackend(_BaseTask2SharedBackend):
-    """Simulation-local bridge that renders the extra dataset cameras."""
+class BiSOCameraSharedBackend(_BaseBiSOSharedMujocoBackend):
+    """Shared backend that adds dataset-camera rendering to the base robot bridge."""
 
     def __init__(
         self,
@@ -154,8 +160,9 @@ def make_bimanual_buses(
     realtime: bool = True,
     slowmo: float = 1.0,
     launch_viewer: bool = False,
-) -> tuple[Task2SharedBackend, dict[str, Task2ArmBus]]:
-    backend = Task2SharedBackend(
+) -> tuple[BiSOCameraSharedBackend, dict[str, BiSOArmBus]]:
+    """Build the dataset-camera backend and its two arm bus adapters."""
+    backend = BiSOCameraSharedBackend(
         xml_path=xml_path,
         robot_dofs=robot_dofs,
         render_size=render_size,
@@ -165,9 +172,27 @@ def make_bimanual_buses(
         slowmo=slowmo,
         launch_viewer=launch_viewer,
     )
-    buses = {f"arm{i}": Task2ArmBus(backend, i) for i in range(backend.num_arms)}
+    buses = {f"arm{i}": BiSOArmBus(backend, i) for i in range(backend.num_arms)}
     return backend, buses
 
 
 def make_task2_bimanual_buses(*args, **kwargs):
+    """Compatibility alias for older BI-SO scripts/configs."""
     return make_bimanual_buses(*args, **kwargs)
+
+
+def make_bi_so_camera_buses(*args, **kwargs):
+    """Preferred descriptive factory alias for the dataset-camera bridge."""
+    return make_bimanual_buses(*args, **kwargs)
+
+
+# Compatibility alias for older imports in this folder.
+Task2SharedBackend = BiSOCameraSharedBackend
+
+__all__ = [
+    "BiSOCameraSharedBackend",
+    "Task2SharedBackend",
+    "make_bi_so_camera_buses",
+    "make_bimanual_buses",
+    "make_task2_bimanual_buses",
+]

@@ -28,6 +28,8 @@ class BiSOFollowerSimulatedConfig(RobotConfig):
     sim_root: Path | None = None
     bridge_path: Path | None = None
     xml_path: Path | None = None
+    # Bridge modules may expose multiple factory names for backwards
+    # compatibility. The default is the stable one used throughout this folder.
     bridge_factory_name: str = "make_bimanual_buses"
 
     robot_dofs: int = 6

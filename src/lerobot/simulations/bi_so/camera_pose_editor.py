@@ -12,7 +12,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from lerobot.robots.bi_so_follower_simulated.mujoco.bridge import Task2SharedBackend as _TeleopSharedBackend
+from lerobot.robots.bi_so_follower_simulated.mujoco.bridge import BiSOSharedMujocoBackend as _TeleopSharedBackend
 from lerobot.utils.utils import init_logging
 
 
